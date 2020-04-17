@@ -182,7 +182,7 @@ search_spotify(q, type = c("album", "artist", "playlist", "track"),
 ```{r}
 
 
-b <- search_spotify(q="Juicy The Notorious B.I.G.", 'track', limit=1)
+b <- search_spotify(q="Shinjitsu No Dangan", 'track', limit=20)
 
 # get_playlist_audio_features("tmock1923", "7e5")
 ```

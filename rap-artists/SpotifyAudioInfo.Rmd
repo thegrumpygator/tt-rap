@@ -26,7 +26,7 @@ pull_id <- function(query) {
 }
 
 # read in the bbc rankings from the data file
-rankings <- readr::read_csv("../data/rankings.csv")
+rankings <- readr::read_csv("../data/rankings_edit.csv")
 
 # read spotify info from environment
 cid <- Sys.getenv('SPOTIFY_CLIENT_ID')
