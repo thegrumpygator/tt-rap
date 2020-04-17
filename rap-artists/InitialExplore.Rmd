@@ -6,6 +6,8 @@ output: html_notebook
 Rap analysis
 
 ```{r}
+library(spotifyr)
+library(tidyverse)
 # Get the Data
 
 polls <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2020/2020-04-14/polls.csv')
@@ -64,8 +66,7 @@ n5	double	Number of votes as #5
 
 
 ```{r}
-library(spotifyr)
-library(tidyverse)
+
 
 cid <- Sys.getenv('SPOTIFY_CLIENT_ID')
 cs <- Sys.getenv('SPOTIFY_CLIENT_SECRET')
@@ -171,5 +172,117 @@ playlist_songs <- playlist_songs %>%
   select(-row_number)
 
 #write.csv(playlist_songs, 'genre_songs.csv', row.names=FALSE)
+```
+
+search_spotify(q, type = c("album", "artist", "playlist", "track"),
+  market = NULL, limit = 20, offset = 0, include_external = NULL,
+  authorization = get_spotify_access_token(),
+  include_meta_info = FALSE)
+
+```{r}
+
+
+b <- search_spotify(q="Juicy The Notorious B.I.G.", 'track', limit=1)
+
+# get_playlist_audio_features("tmock1923", "7e5")
+```
+
+```{r}
+
+pull_id <- function(query) {
+  search_spotify(query, "track") %>% 
+    arrange(-popularity) %>% 
+    filter(row_number() == 1) %>%
+    pull(id)
+}
+access_token <- get_spotify_access_token(client_id = Sys.getenv('SPOTIFY_CLIENT_ID'),
+                                         client_secret = Sys.getenv('SPOTIFY_CLIENT_SECRET'))
+ranking_ids <- rankings %>%
+  mutate(searchquery = paste(title, artist),
+         searchquery = str_to_lower(searchquery),
+         searchquery = str_remove(searchquery, "ft.*$")) %>%
+  mutate(id = map_chr(searchquery, possibly(pull_id, NA_character_)))
+```
+
+
+`r scales::percent(mean(is.na(ranking_ids$id)))`
+
+
+```{r}
+ranking_features <- ranking_ids %>%
+  mutate(id_group = row_number() %/% 80) %>%
+  select(id_group, id) %>%
+  nest(data = c(id)) %>%
+  mutate(audio_features = map(data, ~get_track_audio_features(.$id)))
+```
+
+
+```{r}
+ranking_df <- ranking_ids %>%
+  bind_cols(ranking_features %>%
+              select(audio_features) %>%
+              unnest(audio_features)) %>%
+  select(title, artist, points, year, danceability:tempo) %>%
+  na.omit()
+  
+```
+
+```{r}
+library(corrr)
+
+ranking_df %>%
+  select(year:tempo) %>%
+  correlate() %>%
+  rearrange() %>%
+  shave() %>%
+  rplot(shape = 15, colors = c("darkorange", "white", "darkcyan"))
+  
+```
+
+
+```{r}
+ranking_lm <- ranking_df %>%
+  select(-title, -artist) %>%
+  lm(log(points) ~ ., data = .)
+
+summary(ranking_lm)
+```
+
+## Principal component analysis
+
+```{r}
+library(tidymodels)
+library(forcats)
+
+ranking_rec <- recipe(points ~ ., data = ranking_df) %>%
+  update_role(title, artist, new_role = "id") %>%
+  step_log(points) %>%
+  step_normalize(all_predictors()) %>%
+  step_pca(all_predictors())
+
+ranking_prep <- prep(ranking_rec)
+  
+```
+
+```{r}
+tidied_pca <- tidy(ranking_prep, 3)
+
+tidied_pca %>%
+  mutate(component = fct_inorder(component)) %>%
+  ggplot(aes(value, terms, fill = terms)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~component) +
+  labs(y = NULL)
+```
+
+```{r}
+tidied_pca %>%
+  filter(component %in% c("PC1", "PC2")) %>%
+  group_by(component) %>%
+  top_n(6, abs(value)) %>%
+  ungroup() %>%
+  ggplot(aes(abs(value), terms, fill=value>0))+
+  geom_col() +
+  facet_wrap(~component, scales="free_y")
 ```
 

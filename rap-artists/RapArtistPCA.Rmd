@@ -1,0 +1,197 @@
+---
+title: "Silge-PCA"
+author: "Brian L. Fuller"
+date: "4/15/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#https://juliasilge.com/blog/best-hip-hop/
+library(spotifyr)
+library(tidyverse)
+library(spotifyr)
+library(corrr)
+library(tidymodels)
+library(forcats)
+library(tidytext)
+```
+
+```{r}
+rankings <- readr::read_csv("../data/rankings.csv")
+```
+
+```{r}
+rankings %>%
+  ggplot(aes(year, points, color = gender)) +
+  geom_jitter(alpha = 0.7) +
+  scale_y_log10() +
+  labs(
+    y = "Critic rating",
+    x = NULL,
+    color = NULL
+  )
+```
+
+
+
+
+```{r}
+cid <- Sys.getenv('SPOTIFY_CLIENT_ID')
+cs  <- Sys.getenv('SPOTIFY_CLIENT_SECRET')
+
+access_token <- get_spotify_access_token(client_id = cid,
+                                         client_secret = cs)
+
+```
+
+
+
+```{r}
+playlist_features <- get_playlist_audio_features("tmock1923", "7esD007S7kzeSwVtcH9GFe")
+
+playlist_features
+```
+
+```{r}
+pull_id <- function(query) {
+  search_spotify(query, "track") %>% 
+    arrange(-popularity) %>% 
+    filter(row_number() == 1) %>%
+    pull(id)
+}
+```
+
+
+
+```{r}
+ranking_ids <- rankings %>%
+  mutate(
+    search_query = paste(title, artist),
+    search_query = str_to_lower(search_query),
+    search_query = str_remove(search_query, "ft.*$")
+  ) %>%
+  mutate(id = map_chr(search_query, possibly(pull_id, NA_character_)))
+
+ranking_ids %>%
+  select(title, artist, id)
+```
+`r scales::percent(mean(is.na(ranking_ids$id)))`
+
+```{r}
+ranking_features <- ranking_ids %>%
+  mutate(id_group = row_number() %/% 80) %>%
+  select(id_group, id) %>%
+  nest(data = c(id)) %>%
+  mutate(audio_features = map(data, ~ get_track_audio_features(.$id)))
+
+ranking_features
+```
+
+```{r}
+ranking_df <- ranking_ids %>%
+  bind_cols(ranking_features %>%
+              select(audio_features) %>%
+              unnest(audio_features)) %>%
+  select(title, artist, points, year, danceability:tempo) %>%
+  na.omit()
+
+ranking_df
+```
+
+```{r}
+ranking_df %>%
+  select(year:tempo) %>%
+  correlate() %>%
+  rearrange() %>%
+  shave() %>%
+  rplot(shape = 15, colors = c("darkorange", "white", "darkcyan"))
+```
+
+```{r}
+ranking_lm <- ranking_df %>%
+  select(-title, -artist) %>%
+  lm(log(points) ~ ., data = .)
+
+summary(ranking_lm)
+```
+
+```{r}
+ranking_rec <- recipe(points ~ ., data = ranking_df) %>%
+  update_role(title, artist, new_role = "id") %>%
+  step_log(points) %>%
+  step_normalize(all_predictors()) %>%
+  step_pca(all_predictors())
+
+ranking_prep <- prep(ranking_rec)
+
+ranking_prep
+```
+
+```{r}
+tidied_pca <- tidy(ranking_prep, 3)
+
+tidied_pca %>%
+  mutate(component = fct_inorder(component)) %>%
+  ggplot(aes(value, terms, fill = terms)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~component) +
+  labs(y = NULL)
+```
+
+```{r}
+tidied_pca %>%
+  filter(component %in% c("PC1", "PC2", "PC3", "PC4")) %>%
+  group_by(component) %>%
+  top_n(6, abs(value)) %>%
+  ungroup() %>%
+  mutate(terms = reorder_within(terms, abs(value), component)) %>%
+  ggplot(aes(abs(value), terms, fill = value > 0)) +
+  geom_col() +
+  facet_wrap(~component, scales = "free_y") +
+  scale_y_reordered() +
+  labs(
+    x = "Absolute value of contribution",
+    y = NULL, fill = "Positive?"
+  )
+```
+
+```{r}
+juice(ranking_prep) %>%
+  ggplot(aes(PC1, PC2, label = title)) +
+  geom_point(alpha = 0.2) +
+  geom_text(check_overlap = TRUE, family = "IBMPlexSans")
+```
+
+```{r}
+sdev <- ranking_prep$steps[[3]]$res$sdev
+
+percent_variation <- sdev^2 / sum(sdev^2)
+
+tibble(
+  component = unique(tidied_pca$component),
+  percent_var = percent_variation ## use cumsum() to find cumulative, if you prefer
+) %>%
+  mutate(component = fct_inorder(component)) %>%
+  ggplot(aes(component, percent_variation)) +
+  geom_col() +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(x = NULL, y = "Percent variance explained by each PCA component")
+```
+
+```{r}
+juice(ranking_prep)
+```
+
+```{r}
+pca_fit <- juice(ranking_prep) %>%
+  select(-title, -artist) %>%
+  lm(points ~ ., data = .)
+
+summary(pca_fit)
+```
+
+So what did we find? There is some evidence here that older, more danceable, higher valence songs (PC1) were rated higher by critics.

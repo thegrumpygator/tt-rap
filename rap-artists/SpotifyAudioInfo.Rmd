@@ -1,0 +1,78 @@
+---
+title: "RapArtists-GetSpotifyAudioInfo"
+author: "Brian L. Fuller"
+date: "4/16/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(spotifyr)
+library(tidyverse)
+
+```
+
+
+
+```{r}
+
+# Define a function to get the spotify id of a track using the api search func
+pull_id <- function(query) {
+  search_spotify(query, "track") %>% 
+    arrange(-popularity) %>% 
+    filter(row_number() == 1) %>%
+    pull(id)
+}
+
+# read in the bbc rankings from the data file
+rankings <- readr::read_csv("../data/rankings.csv")
+
+# read spotify info from environment
+cid <- Sys.getenv('SPOTIFY_CLIENT_ID')
+cs  <- Sys.getenv('SPOTIFY_CLIENT_SECRET')
+
+# get an access token
+access_token <- get_spotify_access_token(client_id = cid,
+                                         client_secret = cs)
+
+# add a column to table to store the search string for use with spotify
+# In this case, it's the title and artist concated together and made into
+#   lower case and removing some extra info at the end. Calls the search
+#   function and if nothing is returned, puts NA in the table for the ID.
+ranking_ids <- rankings %>%
+  mutate(
+    search_query = paste(title, artist),
+    search_query = str_to_lower(search_query),
+    search_query = str_remove(search_query, "ft.*$")
+  ) %>%
+  mutate(id = map_chr(search_query, possibly(pull_id, NA_character_)))
+
+# Sends the track id back to spotify to get the track audio info. Since 
+#   spotify limits the query to 100 at a time, this will only send 80 
+#   per call adn nest the results.
+ranking_features <- ranking_ids %>%
+  mutate(id_group = row_number() %/% 80) %>%
+  select(id_group, id) %>%
+  nest(data = c(id)) %>%
+  mutate(audio_features = map(data, ~ get_track_audio_features(.$id)))
+
+# Un nest the results and clean up the frame
+
+# NOTE: This will include several rows that are NA due to the results
+#   of the search above not returning track id from spotify.
+ranking_df <- ranking_ids %>%
+  bind_cols(ranking_features %>%
+              select(audio_features) %>%
+              unnest(audio_features)) %>%
+  select(title, artist, points, year, danceability:tempo)
+
+# write out the resulting frame as a csv
+readr::write_csv(ranking_df, path="ranking_with_audio_info.csv")
+```
+
+
+
+```{r echo=FALSE}
+
+```
